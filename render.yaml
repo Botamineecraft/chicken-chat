@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: chicken-chat
+    env: node
+    buildCommand: npm install
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: chat-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
