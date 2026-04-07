@@ -26,10 +26,12 @@
                 <div class="sidebar-header">
                     <div class="logo-small">🐔</div>
                     <span class="app-name">Chicken Chat</span>
-                    <div class="user-info">
-                        <span id="current-user-name"></span>
-                        <button id="logout-btn" title="Выйти">⏻</button>
-                    </div>
+                </div>
+
+                <div class="user-bar">
+                    <div class="user-avatar" id="my-avatar"></div>
+                    <span id="current-user-name" class="my-name"></span>
+                    <button id="logout-btn" class="btn-icon" title="Выйти">⏻</button>
                 </div>
 
                 <div class="sidebar-section">
@@ -64,6 +66,8 @@
                             <span id="chat-room-desc"></span>
                         </div>
                         <div id="typing-indicator" class="typing-indicator hidden"></div>
+                        <button id="call-btn" class="btn-icon" title="Позвонить" style="display:none">📞</button>
+                        <button id="invite-btn" class="btn-icon" title="Пригласить в комнату">👤+</button>
                     </div>
 
                     <div id="messages" class="messages"></div>
@@ -107,6 +111,55 @@
             </div>
         </div>
 
+        <div id="invite-modal" class="modal hidden">
+            <div class="modal-content">
+                <h3>Пригласить в комнату</h3>
+                <p id="invite-room-name" style="color:var(--accent);margin-bottom:0.5rem"></p>
+                <div id="invite-user-list" class="invite-list"></div>
+                <div class="modal-buttons">
+                    <button id="cancel-invite-btn" class="btn-secondary">Закрыть</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="call-modal" class="modal hidden">
+            <div class="modal-content call-modal-content">
+                <div class="call-status">
+                    <div class="call-avatar" id="call-avatar"></div>
+                    <h3 id="call-name"></h3>
+                    <p id="call-status-text" class="call-status-text">Вызов...</p>
+                    <p id="call-timer" class="call-timer">00:00</p>
+                </div>
+                <div class="call-video-area">
+                    <video id="remote-video" autoplay playsinline></video>
+                    <video id="local-video" autoplay playsinline muted></video>
+                </div>
+                <div class="call-controls">
+                    <button id="call-mute-btn" class="btn-call btn-mute" title="Микрофон">🎤</button>
+                    <button id="call-camera-btn" class="btn-call btn-mute" title="Камера">📷</button>
+                    <button id="call-screen-btn" class="btn-call btn-mute" title="Демонстрация экрана">🖥</button>
+                    <button id="call-end-btn" class="btn-call btn-end" title="Завершить">📞</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="incoming-call-modal" class="modal hidden">
+            <div class="modal-content call-modal-content">
+                <div class="call-status">
+                    <div class="call-avatar" id="incoming-avatar"></div>
+                    <h3 id="incoming-name"></h3>
+                    <p class="call-status-text">Входящий звонок...</p>
+                    <div class="call-type-select">
+                        <button id="call-accept-audio" class="btn-call btn-accept">📞 Аудио</button>
+                        <button id="call-accept-video" class="btn-call btn-accept">📷 Видео</button>
+                    </div>
+                </div>
+                <div class="call-controls">
+                    <button id="call-decline-btn" class="btn-call btn-end">✕ Отклонить</button>
+                </div>
+            </div>
+        </div>
+
         <input type="file" id="file-input" class="hidden" multiple>
     </div>
 
@@ -115,5 +168,6 @@
     <script src="js/chat.js"></script>
     <script src="js/voice.js"></script>
     <script src="js/files.js"></script>
+    <script src="js/calls.js"></script>
 </body>
 </html>

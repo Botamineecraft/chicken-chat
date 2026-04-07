@@ -10,7 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    maxHttpBufferSize: 10e6 // 10MB
+    maxHttpBufferSize: 10e6
 });
 
 const PORT = process.env.PORT || 3000;
@@ -21,7 +21,6 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const db = new Database(path.join(DATA_DIR, 'chicken-chat.db'));
-
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
@@ -35,6 +34,7 @@ db.exec(`
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT DEFAULT '',
+        type TEXT DEFAULT 'group',
         created_by TEXT REFERENCES users(id),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -60,11 +60,23 @@ db.exec(`
 
 const insertUser = db.prepare('INSERT OR IGNORE INTO users (id, nickname) VALUES (?, ?)');
 const getUser = db.prepare('SELECT * FROM users WHERE nickname = ?');
-const getAllUsers = db.prepare('SELECT * FROM users ORDER BY created_at');
+const getUserById = db.prepare('SELECT * FROM users WHERE id = ?');
+const getAllUsers = db.prepare('SELECT * FROM users ORDER BY nickname');
 
-const insertRoom = db.prepare('INSERT INTO rooms (id, name, description, created_by) VALUES (?, ?, ?, ?)');
-const getAllRooms = db.prepare('SELECT r.*, u.nickname as creator_name FROM rooms r LEFT JOIN users u ON r.created_by = u.id ORDER BY r.created_at DESC');
+const insertRoom = db.prepare('INSERT INTO rooms (id, name, description, type, created_by) VALUES (?, ?, ?, ?, ?)');
+const getAllRooms = db.prepare(`
+    SELECT r.*, u.nickname as creator_name
+    FROM rooms r
+    LEFT JOIN users u ON r.created_by = u.id
+    ORDER BY r.created_at DESC
+`);
 const getRoom = db.prepare('SELECT * FROM rooms WHERE id = ?');
+const getDMRoom = db.prepare(`
+    SELECT r.* FROM rooms r
+    JOIN room_members rm1 ON r.id = rm1.room_id
+    JOIN room_members rm2 ON r.id = rm2.room_id
+    WHERE r.type = 'dm' AND rm1.user_id = ? AND rm2.user_id = ?
+`);
 
 const insertMember = db.prepare('INSERT OR IGNORE INTO room_members (room_id, user_id) VALUES (?, ?)');
 const removeMember = db.prepare('DELETE FROM room_members WHERE room_id = ? AND user_id = ?');
@@ -95,12 +107,6 @@ const upload = multer({
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/uploads', express.static(UPLOAD_DIR));
-app.use('/api/upload', (req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    if (req.method === 'OPTIONS') return res.sendStatus(200);
-    next();
-});
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Нет файла' });
@@ -122,10 +128,10 @@ app.get('/api/messages/:roomId', (req, res) => {
 });
 
 app.post('/api/rooms', (req, res) => {
-    const { name, description, userId } = req.body;
+    const { name, description, userId, type } = req.body;
     if (!name || !userId) return res.status(400).json({ error: 'Нет имени или userId' });
     const id = uuidv4();
-    insertRoom.run(id, name, description || '', userId);
+    insertRoom.run(id, name, description || '', type || 'group', userId);
     insertMember.run(id, userId);
     res.json({ id, name });
 });
@@ -167,16 +173,59 @@ io.on('connection', (socket) => {
 
     socket.on('create_room', (data, callback) => {
         if (!currentUser) return;
-        const { name, description } = data;
+        const { name, description, type } = data;
         if (!name) { callback({ error: 'Нет имени' }); return; }
 
         const id = uuidv4();
-        insertRoom.run(id, name, description || '', currentUser.id);
+        insertRoom.run(id, name, description || '', type || 'group', currentUser.id);
         insertMember.run(id, currentUser.id);
 
         const room = getRoom.get(id);
         io.emit('room_created', room);
         callback({ success: true, room });
+    });
+
+    socket.on('start_dm', (targetUserId, callback) => {
+        if (!currentUser) return;
+
+        let dmRoom = getDMRoom.get(currentUser.id, targetUserId);
+
+        if (!dmRoom) {
+            const id = uuidv4();
+            const targetUser = getUserById.get(targetUserId);
+            const name = `ЛС: ${currentUser.nickname} ↔ ${targetUser ? targetUser.nickname : '???'}`;
+            insertRoom.run(id, name, '', 'dm', currentUser.id);
+            insertMember.run(id, currentUser.id);
+            insertMember.run(id, targetUserId);
+            dmRoom = getRoom.get(id);
+            io.emit('room_created', dmRoom);
+        }
+
+        callback({ success: true, room: dmRoom });
+    });
+
+    socket.on('invite_to_room', (data, callback) => {
+        if (!currentUser || !data.roomId || !data.userId) return;
+        const room = getRoom.get(data.roomId);
+        if (!room) { callback({ error: 'Комната не найдена' }); return; }
+
+        const targetUser = getUserById.get(data.userId);
+        if (!targetUser) { callback({ error: 'Пользователь не найден' }); return; }
+
+        insertMember.run(data.roomId, data.userId);
+
+        const members = getRoomMembers.all(data.roomId);
+        io.to(data.roomId).emit('user_joined', { user: targetUser, room: data.roomId });
+        io.to(data.roomId).emit('online_users', getOnlineUsersInRoom(data.roomId));
+
+        if (io.sockets.sockets.get(targetUser.id + '_socket')) {
+            io.to(targetUser.id + '_socket').emit('room_invite', {
+                room: room,
+                inviter: currentUser.nickname
+            });
+        }
+
+        callback({ success: true, members });
     });
 
     socket.on('join_room', (roomId, callback) => {
@@ -240,6 +289,46 @@ io.on('connection', (socket) => {
         socket.to(currentRoom).emit('user_typing', { user: currentUser.nickname, room: currentRoom });
     });
 
+    // ===== WEBRTC CALL SIGNALING =====
+    socket.on('call_start', (data, callback) => {
+        if (!currentUser) return;
+        const targetSocket = getSocketByUserId(data.userId);
+        if (!targetSocket) {
+            callback({ error: 'Пользователь не в сети' });
+            return;
+        }
+        io.to(targetSocket.id).emit('call_incoming', {
+            from: currentUser.id,
+            fromName: currentUser.nickname
+        });
+        callback({ success: true });
+    });
+
+    socket.on('call_signal', (data) => {
+        const targetSocket = getSocketByUserId(data.userId);
+        if (targetSocket) {
+            io.to(targetSocket.id).emit('call_signal', {
+                from: currentUser.id,
+                type: data.type,
+                data: data.data
+            });
+        }
+    });
+
+    socket.on('call_reject', (data) => {
+        const targetSocket = getSocketByUserId(data.userId);
+        if (targetSocket) {
+            io.to(targetSocket.id).emit('call_rejected', { from: currentUser.id });
+        }
+    });
+
+    socket.on('call_end', (data) => {
+        const targetSocket = getSocketByUserId(data.userId);
+        if (targetSocket) {
+            io.to(targetSocket.id).emit('call_ended', { from: currentUser.id });
+        }
+    });
+
     socket.on('disconnect', () => {
         if (currentRoom && currentUser) {
             io.to(currentRoom).emit('user_left', { user: currentUser, room: currentRoom });
@@ -251,6 +340,15 @@ io.on('connection', (socket) => {
         }
     });
 });
+
+function getSocketByUserId(userId) {
+    for (const [socketId, socket] of io.sockets.sockets) {
+        if (socket.user && socket.user.id === userId) {
+            return socket;
+        }
+    }
+    return null;
+}
 
 function getOnlineUsersInRoom(roomId) {
     const room = io.sockets.adapter.rooms.get(roomId);
